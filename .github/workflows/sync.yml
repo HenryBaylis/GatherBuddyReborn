@@ -1,0 +1,91 @@
+name: Sync with upstream
+
+# Keeps this fork current with FFXIV-CombatReborn/GatherBuddyReborn:
+#   1. fast-forwards main to upstream's main (main is never edited here, so this always works)
+#   2. rebases the feature branch onto it
+#   3. builds it, and checks the functions this fork adds are still there
+#   4. pushes both, or on any failure opens (or comments on) a "Fork sync failed" issue and pushes nothing.
+#
+# Runs daily and on demand (Actions tab -> Sync with upstream -> Run workflow).
+# Needs a SYNC_TOKEN secret: a fine-grained token for this repository with Contents, Workflows and Issues
+# read/write. The built-in token can't push commits that touch upstream's .github/workflows files.
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: fork-sync
+
+env:
+  UPSTREAM: https://github.com/FFXIV-CombatReborn/GatherBuddyReborn.git
+  FEATURE_BRANCH: feature/autogather-list-ipc
+  PROJECT: GatherBuddy/GatherBuddy.csproj
+  # Functions the feature branch adds to GatherBuddyIpc.cs; the sync fails if a rebase ever loses one.
+  # Space-separated; empty until the first ones exist.
+  REQUIRED_IPC: ""
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN }}
+
+      - name: Fetch upstream
+        run: |
+          git config user.name "fork-sync"
+          git config user.email "fork-sync@users.noreply.github.com"
+          git remote add upstream "$UPSTREAM"
+          git fetch --no-tags upstream main
+          git fetch --no-tags origin "$FEATURE_BRANCH"
+
+      - name: Fast-forward main
+        run: git merge --ff-only upstream/main
+
+      - name: Rebase the feature branch
+        run: |
+          git switch -c "$FEATURE_BRANCH" "origin/$FEATURE_BRANCH"
+          if ! git rebase main; then
+            echo "::error::Rebase conflict in: $(git diff --name-only --diff-filter=U | tr '\n' ' ')"
+            git rebase --abort
+            exit 1
+          fi
+
+      - name: Check the fork's functions survived
+        if: env.REQUIRED_IPC != ''
+        run: |
+          for fn in $REQUIRED_IPC; do
+            grep -q "public .* $fn(" GatherBuddy/Plugin/GatherBuddyIpc.cs || { echo "::error::Missing IPC function $fn"; exit 1; }
+          done
+
+      - name: Build
+        run: |
+          git submodule update --init --recursive
+          curl -sSfL https://goatcorp.github.io/dalamud-distrib/latest.zip -o dalamud.zip
+          mkdir -p "$HOME/.xlcore/dalamud/Hooks/dev"
+          unzip -q dalamud.zip -d "$HOME/.xlcore/dalamud/Hooks/dev"
+          dotnet build "$PROJECT" -c Release
+
+      - name: Push
+        run: |
+          git push origin main
+          git push --force-with-lease="$FEATURE_BRANCH:origin/$FEATURE_BRANCH" origin "$FEATURE_BRANCH"
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: |
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          body="The daily sync with upstream failed and nothing was pushed. Details: $run_url"
+          existing=$(gh issue list --state open --search "Fork sync failed in:title" --json number -q '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "Fork sync failed" --body "$body"
+          fi
