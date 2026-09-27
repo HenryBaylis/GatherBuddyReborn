@@ -23,8 +23,8 @@ env:
   FEATURE_BRANCH: feature/autogather-list-ipc
   PROJECT: GatherBuddy/GatherBuddy.csproj
   # Functions the feature branch adds to GatherBuddyIpc.cs; the sync fails if a rebase ever loses one.
-  # Space-separated; empty until the first ones exist.
-  REQUIRED_IPC: ""
+  # Space-separated.
+  REQUIRED_IPC: "GetAutoGatherLists GetAutoGatherListItems SetAutoGatherList SetAutoGatherListEnabled DeleteAutoGatherList"
 
 jobs:
   sync:
