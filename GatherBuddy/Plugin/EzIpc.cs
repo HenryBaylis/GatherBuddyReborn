@@ -217,23 +217,13 @@ internal static class EzIPC
         var paramTypes = parameters.Select(p => p.ParameterType).ToArray();
         var allTypes = paramTypes.Concat(new[] { returnType }).ToArray();
         
-        Type providerType;
-        Type delegateType;
-        
-        if (paramTypes.Length == 0)
-        {
-            providerType = typeof(ICallGateProvider<>).MakeGenericType(returnType);
-            delegateType = typeof(Func<>).MakeGenericType(returnType);
-        }
-        else if (paramTypes.Length == 1)
-        {
-            providerType = typeof(ICallGateProvider<,>).MakeGenericType(allTypes);
-            delegateType = typeof(Func<,>).MakeGenericType(allTypes);
-        }
-        else
-        {
-            return;
-        }
+        Type[] providerDefs = [typeof(ICallGateProvider<>), typeof(ICallGateProvider<,>), typeof(ICallGateProvider<,,>), typeof(ICallGateProvider<,,,>), typeof(ICallGateProvider<,,,,>)];
+        Type[] funcDefs     = [typeof(Func<>), typeof(Func<,>), typeof(Func<,,>), typeof(Func<,,,>), typeof(Func<,,,,>)];
+        if (paramTypes.Length >= providerDefs.Length)
+            throw new NotSupportedException($"{paramTypes.Length} parameters; at most {providerDefs.Length - 1} are supported");
+
+        var providerType = providerDefs[paramTypes.Length].MakeGenericType(allTypes);
+        var delegateType = funcDefs[paramTypes.Length].MakeGenericType(allTypes);
 
         var getProviderMethod = typeof(IDalamudPluginInterface)
             .GetMethods()
