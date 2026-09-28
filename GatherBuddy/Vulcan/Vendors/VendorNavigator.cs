@@ -569,6 +569,16 @@ public class VendorNavigator
     public bool               IsFailed          => _state == State.Failed;
     public bool               IsActive          => _state is not (State.Idle or State.ReadyToPurchase or State.Failed);
     public VendorNpcLocation? CurrentTarget     => _target;
+    /// <summary>Why the last navigation failed, e.g. "the teleport failed"; null unless <see cref="IsFailed"/>.</summary>
+    public string?            FailureReason     { get; private set; }
+    /// <summary>The navigation stage, e.g. "Teleporting", "Navigating" or "ReadyToPurchase" (arrived).</summary>
+    public string             StateName         => _state.ToString();
+
+    private void Fail(string reason)
+    {
+        FailureReason = reason;
+        _state        = State.Failed;
+    }
 
     public void PlaceMapMarker(VendorNpcLocation target)
         => PlaceMapFlag(target);
@@ -650,7 +660,7 @@ public class VendorNavigator
         catch (Exception ex)
         {
             GatherBuddy.Log.Error($"[VendorNavigator] Error in Update: {ex.Message}");
-            _state = State.Failed;
+            Fail($"error: {ex.Message}");
         }
     }
 
@@ -658,6 +668,7 @@ public class VendorNavigator
     {
         StopPathing();
         _state                              = State.Idle;
+        FailureReason                       = null;
         _target                             = null;
         _pendingAethernetName               = null;
         _pendingAethernetNeedsSourceApproach = false;
@@ -744,7 +755,7 @@ public class VendorNavigator
                 GatherBuddy.Log.Error($"[VendorNavigator] Firmament route unavailable for territory {_target.TerritoryId}; Lifestream may be unavailable or the Foundation aetheryte may be unattuned.");
             GatherBuddy.Log.Error($"[VendorNavigator] No route found to {_target.NpcName} in territory {_target.TerritoryId} (source={_target.Source}, map={_target.MapRowId}, position={_target.Position})");
             GatherBuddy.Log.Error($"[VendorNavigator] No route found to territory {_target.TerritoryId}");
-            _state = State.Failed;
+            Fail(TryGetHousingDistrict(_target.TerritoryId, out _) ? "no route: the housing district's city aetheryte may not be attuned" : _target.TerritoryId == FirmamentTerritoryId ? "no route: Lifestream may be missing or the Foundation aetheryte not attuned" : "no route: no attuned aetheryte leads to that zone");
             return;
         }
         var parentTerritoryId = (aethernetName != null || requiresHousingEntry || requiresFirmamentEntry)
@@ -791,7 +802,7 @@ public class VendorNavigator
         else
         {
             GatherBuddy.Log.Error("[VendorNavigator] Teleport failed");
-            _state = State.Failed;
+            Fail("the teleport failed");
         }
     }
 
@@ -1602,7 +1613,7 @@ public class VendorNavigator
             ClearPathTask();
             GatherBuddy.Log.Error($"[VendorNavigator] Pathfinding task failed: {ex.Message}");
             StopPathing();
-            _state = State.Failed;
+            Fail($"pathfinding failed: {ex.Message}");
             return;
         }
 
@@ -1624,7 +1635,7 @@ public class VendorNavigator
             }
             GatherBuddy.Log.Error($"[VendorNavigator] VNavmesh failed to find a path to {_navigationDestination}");
             StopPathing();
-            _state = State.Failed;
+            Fail("vnavmesh found no path to the destination");
             return;
         }
 

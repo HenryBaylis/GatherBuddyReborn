@@ -2,12 +2,15 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Numerics;
+using GatherBuddy.Vulcan.Vendors;
+using ENpcResident = Lumina.Excel.Sheets.ENpcResident;
 
 namespace GatherBuddy.Plugin;
 
 public sealed class GatherBuddyIpc : IDisposable
 {
-    public const int IpcVersion = 3;
+    public const int IpcVersion = 4;
 
     private readonly GatherBuddy _plugin;
 
@@ -78,6 +81,63 @@ public sealed class GatherBuddyIpc : IDisposable
     [EzIPC]
     public bool DeleteAutoGatherList(string listName)
         => _plugin.AutoGatherListsManager.DeleteList(listName);
+
+    // Travel: GatherBuddy's vendor navigator taken anywhere (teleport, aethernet and housing via Lifestream, then
+    // walking or flying with vnavmesh). Only one navigation runs at a time, shared with vendor purchases and
+    // collectable turn-ins, so a travel is refused while one of those is running.
+
+    private VendorNpcLocation? _travelTarget;
+
+    /// <summary>
+    /// Travels to a position in a zone: picks the aetheryte, teleports, takes the aethernet, then walks or flies.
+    /// With an NPC id, ends in interaction range of that NPC once it's in sight.
+    /// </summary>
+    /// <param name="npcId">An ENpcResident id, or 0 for a plain position.</param>
+    /// <returns>Empty when started, otherwise why not.</returns>
+    [EzIPC]
+    public string TravelTo(uint territoryId, Vector3 position, uint npcId)
+    {
+        if (GatherBuddy.AutoGather.Enabled)
+            return "auto-gather is on";
+        if (GatherBuddy.VendorPurchaseManager.IsRunning || GatherBuddy.VendorBuyListManager.IsBusy
+         || GatherBuddy.CollectableManager.IsRunning)
+            return "a vendor purchase or collectable turn-in is running";
+        if (GatherBuddy.VendorNavigator.IsActive && GatherBuddy.VendorNavigator.CurrentTarget != _travelTarget)
+            return "GatherBuddy is already navigating somewhere";
+
+        var name = npcId != 0 && Dalamud.GameData.GetExcelSheet<ENpcResident>().TryGetRow(npcId, out var npc)
+            ? npc.Singular.ExtractText()
+            : "destination";
+        _travelTarget = new VendorNpcLocation(npcId, name, territoryId, 0, position, VendorNpcLocationSource.Override);
+        GatherBuddy.VendorNavigator.StartNavigation(_travelTarget);
+        return string.Empty;
+    }
+
+    /// <summary>
+    /// "Idle" (no travel, or it was stopped or taken over), "Teleporting", "WaitingForTeleport", "WaitingForZoneLoad",
+    /// "Navigating", "Arrived", or "Failed: reason".
+    /// </summary>
+    [EzIPC]
+    public string GetTravelState()
+    {
+        var navigator = GatherBuddy.VendorNavigator;
+        if (_travelTarget == null || navigator.CurrentTarget != _travelTarget)
+            return "Idle";
+        if (navigator.IsReadyToPurchase)
+            return "Arrived";
+        if (navigator.IsFailed)
+            return $"Failed: {navigator.FailureReason ?? "unknown"}";
+        return navigator.StateName;
+    }
+
+    /// <summary>Stops a travel started with <see cref="TravelTo"/>; leaves other navigation alone.</summary>
+    [EzIPC]
+    public void StopTravel()
+    {
+        if (_travelTarget != null && GatherBuddy.VendorNavigator.CurrentTarget == _travelTarget)
+            GatherBuddy.VendorNavigator.Stop();
+        _travelTarget = null;
+    }
 
     [EzIPCEvent]
     public Action AutoGatherWaiting;
