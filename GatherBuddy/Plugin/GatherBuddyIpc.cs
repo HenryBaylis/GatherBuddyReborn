@@ -10,7 +10,7 @@ namespace GatherBuddy.Plugin;
 
 public sealed class GatherBuddyIpc : IDisposable
 {
-    public const int IpcVersion = 4;
+    public const int IpcVersion = 5;
 
     private readonly GatherBuddy _plugin;
 
@@ -138,6 +138,43 @@ public sealed class GatherBuddyIpc : IDisposable
             GatherBuddy.VendorNavigator.Stop();
         _travelTarget = null;
     }
+
+    // Vendor buy lists by name: buy items from NPC vendors (any currency GatherBuddy supports) until the character owns
+    // the target amount, travelling to each vendor.
+
+    /// <summary>Every NPC offer for the item: currency, cost, NPC names, and whether GatherBuddy can buy it automatically.</summary>
+    [EzIPC]
+    public List<VendorOffer> GetVendorOffers(uint itemId)
+        => VendorBuyListManager.GetOffers(itemId);
+
+    /// <summary>
+    /// Creates a vendor buy list, or replaces the entries of the one with this name: item id to the amount to own.
+    /// </summary>
+    /// <returns>How many items were added (unsupported ones are skipped), 0 if that list is running, -1 while vendor data loads.</returns>
+    [EzIPC]
+    public int SetVendorBuyList(string listName, Dictionary<uint, uint> targets)
+        => GatherBuddy.VendorBuyListManager.SetListTargets(listName, targets);
+
+    /// <returns>"Started", or why not: "AlreadyRunning", "AutomationUnavailable" (needs Allagan Tools or Allagan Item Search),
+    /// "NoList", "Empty", "NoPendingEntries" (already owned), "VendorDataLoading", "LocationDataLoading", "AnotherPurchaseRunning"…</returns>
+    [EzIPC]
+    public string StartVendorBuyList(string listName)
+    {
+        if (GatherBuddy.AutoGather.Enabled)
+            return "AutoGatherOn";
+        if (GatherBuddy.VendorNavigator.IsActive && GatherBuddy.VendorNavigator.CurrentTarget == _travelTarget)
+            return "Travelling";
+        return GatherBuddy.VendorBuyListManager.StartList(listName);
+    }
+
+    /// <summary>"Running: status" while a buy list runs, otherwise "Idle: last status".</summary>
+    [EzIPC]
+    public string GetVendorBuyStatus()
+        => (GatherBuddy.VendorBuyListManager.IsBusy ? "Running: " : "Idle: ") + GatherBuddy.VendorBuyListManager.StatusText;
+
+    [EzIPC]
+    public void StopVendorBuyList()
+        => GatherBuddy.VendorBuyListManager.Stop();
 
     [EzIPCEvent]
     public Action AutoGatherWaiting;
